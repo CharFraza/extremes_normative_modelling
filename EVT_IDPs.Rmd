@@ -1,0 +1,263 @@
+---
+title: "EVT"
+author: "Charlotte"
+date: "4/6/2021"
+output: html_document
+---
+The peak over threshold-method. 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document.
+
+```{r}
+library(evd)
+library(readr)
+library(evir)
+library(vioplot)
+library(ggplot2)
+library(tidyr)
+#library(tidyverse)
+library(caret)
+library(MASS)
+
+
+set.seed(123)
+```
+Import the Z values of the WMH IDP or select the first voxel to make inferences on.
+Split the data set so that 80% is used for training and 20% for evaluating the distribution fit.
+
+```{r}
+#Z_estimate <- read_csv("/project_cephfs/3022017.02/projects/chafra/ukbiobank/data/np_UKB_blr_subj_15495_run_FULL7-MD-BLR-bspline_results/Z_estimate.csv")
+#Z_estimate <- as.matrix(sapply(Z_estimate, as.numeric))  
+#Z<-Z_estimate[2]
+#Z1<-Z_estimate[3]
+#Z2<-Z_estimate[4]
+#print(Z)
+
+n_samples <- 5000
+n_features <- 5
+
+# Specify precision matrix
+sigma <- 1 # Change sigma to change the connection strength
+precision_matrix = sigma*rbind(c(2, -1, 0, 0, 0), 
+                    c(-1, 2, -1, 0, 0),
+                    c(0, -1, 2, -1, 0),
+                    c(0, 0, -1, 2, -1),
+                    c(0, 0, 0, -1, 2))
+
+covariance_matrix <- ginv(precision_matrix)
+X <- mvrnorm(n = n_samples, mu=rep(0,5), Sigma=covariance_matrix)
+
+plot(X[,1:2])
+
+```
+
+
+```{r}
+Z_estimate <- read_csv("/project_cephfs/3022017.02/projects/big_data/data/ukb_processed_2/25781-2.0/blr_bspline_warp/Z_estimate.txt")
+#Z_estimate<-X[,1]
+
+Z_estimate <- as.matrix(sapply(Z_estimate, as.numeric))  
+training.samples <- Z_estimate %>%
+  createDataPartition(p=0.8,list=FALSE)
+Z <-Z_estimate[training.samples,]
+test.data<-Z_estimate[-training.samples,]
+head(Z)
+```
+
+Have a look at the data and some basic statistics.
+
+```{r}
+png(file="/home/preclineu/chafra/Desktop/code_phd/data/images/univariate_evt_hist1.png", width=600, height=350)
+h1<-hist(Z,100)
+dev.off()
+nth_90_perc <- Z[(Z>quantile(Z,0.90))|(Z<=-quantile(Z,0.90))]
+nth_95_perc <- Z[(Z>quantile(Z,0.95))|(Z<=-quantile(Z,0.95))]
+nth_99_perc <- Z[(Z>quantile(Z,0.99))|(Z<=-quantile(Z,0.99))]
+
+emplot(nth_90_perc)
+png(file="/home/preclineu/chafra/Desktop/code_phd/data/images/univariate_evt_hist2.png", width=600, height=350)
+h2<-hist(nth_90_perc, 100, plot = F)
+h3<-hist(nth_95_perc, 100, plot = F)
+h4<-hist(nth_99_perc, 100, plot = F)
+
+plot(h1)
+plot(h2, col="darksalmon", add=TRUE)
+plot(h3, col="red2", add=TRUE)
+plot(h4, col="red4", add=TRUE)
+dev.off()
+summary(Z)
+sd(Z)
+png(file="/home/preclineu/chafra/Desktop/code_phd/data/images/univariate_evt_qqplot.png", width=600, height=350)
+qqnorm(Z)
+qqline(Z, col="red", lty="dashed")
+dev.off()
+```
+
+Plot the data with a threshold at the 95% quantile. The values above the threshold could be modeled as a generalized Pareto distribution, with some Shape and Scale parameter. More exploration of the correct threshold down below.
+
+```{r}
+Z<-abs(Z)
+plot(abs(Z), cex=0.2)
+abline(h=quantile(abs(Z),0.95), col="blue")
+```
+Finding a good threshold: or by setting a predefined quantile (90%~95%) or by looking at graphical tools.
+For example, the mean residual life plot (MRL-plot) or a hill plot. It uses the expectation value of the excesses for the GPD. When the plot starts showing linear behaviour a 'good' threshold is found.
+The hill plot is suitable for long tailed distributions, where the shape parameter of the GPD tends to be positive.
+
+```{r}
+png(file="/home/preclineu/chafra/Desktop/code_phd/data/images/univariate_evt_mrlplot.png", width=600, height=350)
+evd::mrlplot(abs(Z),  main="Mean residual life plot")
+abline(v=quantile(abs(Z),0.90), lty = 2, col="darksalmon")
+abline(v=quantile(abs(Z),0.95), lty = 2, col="red2")
+abline(v=quantile(abs(Z),0.99), lty = 2, col="red4")
+dev.off()
+
+png(file="/home/preclineu/chafra/Desktop/code_phd/data/images/univariate_evt_threshold.png", width=600, height=350)
+plot(abs(Z), cex=0.2, main="Peaks over threshold")
+abline(h=quantile(abs(Z),0.90), lty = 2, col="darksalmon")
+abline(h=quantile(abs(Z),0.95), lty = 2, col="red2")
+abline(h=quantile(abs(Z),0.99), lty = 2, col="red4")
+dev.off()
+
+#hill(Z)
+```
+The solid line represents the emprirical MRL with the dashed lines representing a 95% confidence interval.
+
+The next graphical tool is the parameter stability plot. It looks at estimates of the shape and scale parameters to find a suitable threshold. Look at the lowest value where the plots are approximately constant.
+
+```{r}
+tcplot(Z, tlim = c(quantile(abs(Z),0.80),quantile(abs(Z),0.99)))
+abline(v=quantile(abs(Z),0.90), lty = 2, col="blue")
+abline(v=quantile(abs(Z),0.95), lty = 2, col="blue")
+abline(v=quantile(abs(Z),0.99), lty = 2, col="blue")
+```
+Let's try a multiple-threshold diagnostic. We first make 15 thresholds from the 85% percent quantile to the 99% quantile. 
+We use a threshold choice plot to decide on the best threshold:
+
+```{r}
+thresholds <- quantile(Z, probs = c(0.5, 0.99))
+plots<-tcplot(Z, thresholds, nt = 100, pscale = TRUE, which=1)
+title("Scale GPD")
+abline(v=quantile(0.90), lty = 2, col="darksalmon")
+abline(v=quantile(0.95), lty = 2, col="red2")
+abline(v=quantile(0.99), lty = 2, col="red4")
+
+
+plots<-tcplot(Z, thresholds, nt = 100, pscale = TRUE, which=2)
+title("Shape GPD")
+abline(v=quantile(0.90), lty = 2, col="darksalmon")
+abline(v=quantile(0.95), lty = 2, col="red2")
+abline(v=quantile(0.99), lty = 2, col="red4")
+
+```
+
+A threshold around 2 or 95% seems adequate. We check how much data the different thresholds can give us.
+```{r}
+quantile(Z,0.95) #90% Var
+mean(Z[Z>=quantile(Z,0.95)]) #90% ES
+sum(Z>=quantile(Z,0.95))
+nth_perc <- Z[(Z>quantile(Z,0.95))]
+```
+
+Afterwards we can look at parameter estimation for the shape and scale. There are several methods that can be used for this one of which the Maximum Likelihood fitting for the Peaks over threshold using a generalized Pareto (fpot).
+
+```{r}
+thresh<- quantile(abs(Z),0.95)
+M1<-fpot(abs(Z), thresh, model="gpd")
+M1
+plot(M1)
+
+```
+Let's look at the profile likelihood from which the scale and shape parameters are decided.  We can see the maximum, the more peaked the higher our confidence. 
+```{r}
+plot(profile(M1))
+```
+Shape <0 GEV tends to the weibull distribution. 
+
+```{r}
+estimated_data = evd::rgpd(10000, loc = thresh, scale = M1$param[1], shape = M1$param[2])
+excess_train <- abs(Z)[abs(Z)>thresh]
+excess_test <- test.data[test.data>thresh]
+
+c1 <- rgb(173,216,230,max = 255, alpha = 80, names = "lt.blue")
+c2 <- rgb(255,192,203, max = 255, alpha = 80, names = "lt.pink")
+
+hist_train <- hist(excess_train,100, prob=T)
+hist_test <- hist(excess_test,100, prob=T)
+
+plot(hist_train, prob=T, col=c1, freq = T)
+plot(hist_test, prob=T, col=c2, freq= T)
+```
+```{r}
+d<-density(excess_train)
+d_test<-density(excess_test)
+plot(d, ylim=c(0,3), col='blue')
+#lines(d_test, col='red')
+x = seq(-5, 5, by=0.01)
+lines(x, evd::dgpd(x, loc = thresh, scale = M1$param[1], shape = M1$param[2]), col="red")
+legend(3.8,3, legend=c("GPD", "Density train"), col=c("red", "blue"), lty=c(1,1), cex=0.7)
+```
+
+
+Other tried functions:
+```{r}
+ext_values <- abs(Z)[abs(Z)>2]
+fgev(ext_values)
+```
+```{r}
+fit=gpd(abs(Z),0.95)
+tail(fit)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
